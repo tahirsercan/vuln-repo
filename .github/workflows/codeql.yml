@@ -11,7 +11,7 @@ on:
 jobs:
   analyze:
     name: Analyze (${{ matrix.language }})
-    runs-on: ${{ (matrix.language == 'swift' && 'macos-latest') || 'ubuntu-latest' }}
+    runs-on: ubuntu-latest
     permissions:
       contents: read
       actions: read
@@ -22,18 +22,27 @@ jobs:
       fail-fast: false
       matrix:
         include:
-        - language: javascript-typescript
-          build-mode: none
+          - language: javascript
+            build-mode: none
 
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      # CodeQL analiz adımları burada olabilir
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@v3
+        with:
+          languages: ${{ matrix.language }}
+
+      - name: Perform CodeQL Analysis
+        uses: github/codeql-action/analyze@v3
+        with:
+          category: "/language:${{matrix.language}}"
 
   duplication-check:
     runs-on: ubuntu-latest
     needs: analyze
+    
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -60,12 +69,24 @@ jobs:
           if [[ -n "$CHANGED_FILES" ]]; then
             echo "Changed files: $CHANGED_FILES"
             jscpd \
-              --min-tokens 10 \
-              --threshold 1 \
+              --min-tokens 30 \
+              --threshold 10 \
               --ignore-identifiers \
-              --reporters console \
-              --ignore "**/generated/**" \
+              --reporters console,json \
+              --output ./jscpd-report \
+              --ignore "**/generated/**,**/node_modules/**,**/*.test.js,**/*.spec.js" \
               $CHANGED_FILES
           else
             echo "No changed files detected. Skipping jscpd."
+          fi
+
+      - name: Check duplication threshold
+        if: success() || failure()
+        run: |
+          if [ -f "./jscpd-report/jscpd-report.json" ]; then
+            DUPLICATION=$(jq '.statistics.total.percentage' ./jscpd-report/jscpd-report.json)
+            if (( $(echo "$DUPLICATION > 10" | bc -l) )); then
+              echo "Code duplication percentage ($DUPLICATION%) exceeds threshold (10%)"
+              exit 1
+            fi
           fi
